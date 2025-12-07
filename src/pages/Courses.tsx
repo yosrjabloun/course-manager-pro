@@ -78,15 +78,39 @@ const Courses = () => {
   }, [subjectFilter]);
 
   const sendNewCourseNotification = async (courseTitle: string, subjectName: string, professorName: string) => {
-    // Get all students
+    if (!profile) return;
+
+    // Get professor's students only
+    const { data: professorStudents } = await supabase
+      .from('professor_students')
+      .select('student_id')
+      .eq('professor_id', profile.id);
+
+    if (!professorStudents || professorStudents.length === 0) {
+      console.log('No students assigned to this professor');
+      return;
+    }
+
+    const studentIds = professorStudents.map((ps) => ps.student_id);
+
+    // Get student details
     const { data: students } = await supabase
       .from('profiles')
-      .select('email, full_name')
-      .eq('role', 'student');
+      .select('id, email, full_name')
+      .in('id', studentIds);
 
     if (students && students.length > 0) {
-      // Send notification to each student
       for (const student of students) {
+        // Create in-app notification
+        await supabase.from('notifications').insert({
+          user_id: student.id,
+          title: 'Nouveau cours disponible',
+          message: `${professorName} a ajouté un nouveau cours: "${courseTitle}" en ${subjectName}`,
+          type: 'course',
+          data: { courseTitle, subjectName, professorName },
+        });
+
+        // Send email notification
         try {
           await supabase.functions.invoke('send-notification', {
             body: {
@@ -101,7 +125,7 @@ const Courses = () => {
             },
           });
         } catch (e) {
-          console.log('Notification skipped for', student.email);
+          console.log('Email notification skipped for', student.email);
         }
       }
     }
