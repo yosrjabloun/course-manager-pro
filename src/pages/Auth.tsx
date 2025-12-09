@@ -69,12 +69,12 @@ const Auth = () => {
     setIsLoading(false);
   };
 
-  const assignStudentToProfessor = async (studentEmail: string, professorId: string) => {
-    // Poll for the profile to be created (max 10 attempts, 500ms each)
+  const assignStudentToProfessor = async (studentEmail: string, professorId: string): Promise<boolean> => {
+    // Poll for the profile to be created (max 20 attempts, 500ms each = 10 seconds max)
     let attempts = 0;
-    const maxAttempts = 10;
+    const maxAttempts = 20;
     
-    const checkAndAssign = async (): Promise<boolean> => {
+    while (attempts < maxAttempts) {
       const { data: newProfile } = await supabase
         .from('profiles')
         .select('id')
@@ -82,6 +82,19 @@ const Auth = () => {
         .maybeSingle();
 
       if (newProfile) {
+        // Check if assignment already exists
+        const { data: existingAssignment } = await supabase
+          .from('professor_students')
+          .select('id')
+          .eq('professor_id', professorId)
+          .eq('student_id', newProfile.id)
+          .maybeSingle();
+
+        if (existingAssignment) {
+          console.log('Assignment already exists');
+          return true;
+        }
+
         const { error } = await supabase.from('professor_students').insert({
           professor_id: professorId,
           student_id: newProfile.id,
@@ -90,20 +103,17 @@ const Auth = () => {
         if (!error) {
           console.log('Student assigned to professor successfully');
           return true;
+        } else {
+          console.error('Assignment error:', error.message);
         }
       }
-      return false;
-    };
-
-    while (attempts < maxAttempts) {
-      const success = await checkAndAssign();
-      if (success) return;
       
       attempts++;
       await new Promise(resolve => setTimeout(resolve, 500));
     }
     
-    console.log('Failed to assign student to professor after max attempts');
+    console.error('Failed to assign student to professor after max attempts');
+    return false;
   };
 
   const handleSignUp = async (e: React.FormEvent) => {
@@ -144,9 +154,16 @@ const Auth = () => {
       return;
     }
 
-    // If student, assign to professor
+    // If student, assign to professor - WAIT for completion
     if (role === 'student' && selectedProfessorId) {
-      await assignStudentToProfessor(email, selectedProfessorId);
+      const assigned = await assignStudentToProfessor(email, selectedProfessorId);
+      if (!assigned) {
+        toast({
+          variant: 'destructive',
+          title: 'Attention',
+          description: 'L\'assignation au professeur a échoué. Veuillez contacter l\'administrateur.',
+        });
+      }
     }
 
     toast({
