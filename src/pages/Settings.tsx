@@ -8,9 +8,11 @@ import { Label } from '@/components/ui/label';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { Settings as SettingsIcon, User, Mail, BookOpen, Calendar, Loader2, Save, Camera } from 'lucide-react';
+import { Profile } from '@/types/database';
+import { Settings as SettingsIcon, User, Mail, BookOpen, Calendar, Loader2, Save, Camera, GraduationCap } from 'lucide-react';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
@@ -18,10 +20,15 @@ const Settings = () => {
   const { profile, user, refreshProfile } = useAuth();
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
+  const [professors, setProfessors] = useState<Profile[]>([]);
+  const [currentProfessor, setCurrentProfessor] = useState<Profile | null>(null);
+  const [selectedProfessorId, setSelectedProfessorId] = useState('');
   const [formData, setFormData] = useState({
     full_name: '',
     class_name: '',
   });
+
+  const isStudent = profile?.role === 'student';
 
   useEffect(() => {
     if (profile) {
@@ -29,8 +36,74 @@ const Settings = () => {
         full_name: profile.full_name || '',
         class_name: profile.class_name || '',
       });
+      if (isStudent) {
+        fetchProfessors();
+        fetchCurrentProfessor();
+      }
     }
   }, [profile]);
+
+  const fetchProfessors = async () => {
+    const { data } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('role', 'professor')
+      .order('full_name');
+    
+    if (data) {
+      setProfessors(data as Profile[]);
+    }
+  };
+
+  const fetchCurrentProfessor = async () => {
+    if (!profile) return;
+    
+    const { data: assignment } = await supabase
+      .from('professor_students')
+      .select('professor_id')
+      .eq('student_id', profile.id)
+      .maybeSingle();
+
+    if (assignment) {
+      setSelectedProfessorId(assignment.professor_id);
+      const { data: prof } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', assignment.professor_id)
+        .maybeSingle();
+      
+      if (prof) {
+        setCurrentProfessor(prof as Profile);
+      }
+    }
+  };
+
+  const handleChangeProfessor = async () => {
+    if (!profile || !selectedProfessorId) return;
+    
+    setLoading(true);
+
+    // Remove existing assignment
+    await supabase
+      .from('professor_students')
+      .delete()
+      .eq('student_id', profile.id);
+
+    // Add new assignment
+    const { error } = await supabase.from('professor_students').insert({
+      professor_id: selectedProfessorId,
+      student_id: profile.id,
+    });
+
+    if (error) {
+      toast({ variant: 'destructive', title: 'Erreur', description: error.message });
+    } else {
+      await fetchCurrentProfessor();
+      toast({ title: 'Professeur mis à jour', description: 'Vous avez été assigné au nouveau professeur.' });
+    }
+
+    setLoading(false);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -242,6 +315,81 @@ const Settings = () => {
               </form>
             </CardContent>
           </Card>
+
+          {/* Professor Assignment for Students */}
+          {isStudent && (
+            <Card className="md:col-span-3 border-0 shadow-lg">
+              <CardHeader>
+                <CardTitle className="text-xl flex items-center gap-2">
+                  <GraduationCap className="w-5 h-5 text-primary" />
+                  Mon Professeur
+                </CardTitle>
+                <CardDescription>
+                  {currentProfessor 
+                    ? `Vous êtes actuellement assigné à ${currentProfessor.full_name}`
+                    : "Sélectionnez votre professeur pour accéder à ses cours et matières"}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-col sm:flex-row gap-4 items-end">
+                  <div className="flex-1 space-y-2">
+                    <Label className="font-medium">Professeur</Label>
+                    <Select
+                      value={selectedProfessorId}
+                      onValueChange={setSelectedProfessorId}
+                    >
+                      <SelectTrigger className="h-12 rounded-xl">
+                        <SelectValue placeholder="Sélectionnez un professeur" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {professors.map((prof) => (
+                          <SelectItem key={prof.id} value={prof.id}>
+                            <div className="flex items-center gap-2">
+                              <GraduationCap className="w-4 h-4 text-primary" />
+                              {prof.full_name}
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button 
+                    onClick={handleChangeProfessor}
+                    disabled={loading || !selectedProfessorId || selectedProfessorId === currentProfessor?.id}
+                    className="gradient-primary rounded-xl h-12 px-6"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Mise à jour...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-4 h-4 mr-2" />
+                        {currentProfessor ? 'Changer de professeur' : 'Assigner'}
+                      </>
+                    )}
+                  </Button>
+                </div>
+                {currentProfessor && (
+                  <div className="mt-4 p-4 rounded-xl bg-primary/5 border border-primary/10">
+                    <div className="flex items-center gap-3">
+                      <Avatar className="w-12 h-12">
+                        <AvatarImage src={currentProfessor.avatar_url || undefined} />
+                        <AvatarFallback className="bg-primary text-primary-foreground font-semibold">
+                          {currentProfessor.full_name?.charAt(0).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <p className="font-semibold text-foreground">{currentProfessor.full_name}</p>
+                        <p className="text-sm text-muted-foreground">{currentProfessor.email}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
     </DashboardLayout>
